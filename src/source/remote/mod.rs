@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 pub use parse::parse_shell_listing;
 use serde::{Deserialize, Serialize};
-use transport::{Probe, files_script, sql_script};
+use transport::{Probe, files_script, missing_sqlite3_script, open_sql_script, sql_script};
 
 use crate::error::{Error, Result};
 use crate::model::{Locator, SessionSummary, SourceId, Transcript};
@@ -367,10 +367,8 @@ impl Host {
                 if probe.sqlite3 {
                     script.push_str(&sql_script(&home, agent, db, queries));
                 } else {
-                    failures.push(format!(
-                        "{}: {agent} needs sqlite3 or llm-sessions on the host",
-                        self.name()
-                    ));
+                    // Reported from the host, and only when the store exists.
+                    script.push_str(&missing_sqlite3_script(&home, agent, db));
                 }
             }
         }
@@ -391,17 +389,46 @@ impl Host {
             })
             .collect();
         let sessions = parse_shell_listing(&raw, self.name(), &dbs);
+        failures.extend(unscanned(&raw, self.name()));
         Ok(HostScan { sessions, failures })
+    }
+
+    /// Read one row-backed session on the host with `sqlite3`, then rebuild
+    /// it with the source's own reconstruction. Only that session's rows
+    /// travel; the database stays where it is.
+    fn open_row_via_shell(
+        &self,
+        session: &SessionSummary,
+        db: &Path,
+        id: &str,
+        home: &Path,
+    ) -> Result<Transcript> {
+        let sources = source::all(home);
+        let reader = source::find(&sources, session.source).ok_or(Error::Unsupported {
+            agent: session.source,
+            what: "reading transcripts",
+        })?;
+        let queries = reader.remote_open_sql(id);
+        if queries.is_empty() {
+            return Err(self.fail(format!(
+                "install llm-sessions on {} to read this transcript",
+                self.name()
+            )));
+        }
+        if !self.probed()?.sqlite3 {
+            return Err(self.fail("sqlite3 is not installed, cannot read this transcript"));
+        }
+        let raw = self.ssh_script(&open_sql_script(&db.to_string_lossy(), &queries))?;
+        let rows = parse::parse_open_rows(&raw);
+        reader.open_remote_rows(db, id, &rows)
     }
 
     /// Fetch one remote body into the local cache, then hand it to the local
     /// adapter for that agent so all nine parsers are reused verbatim.
     fn open_via_shell(&self, session: &SessionSummary, home: &Path) -> Result<Transcript> {
-        let Locator::File { path } = &session.locator else {
-            return Err(self.fail(format!(
-                "install llm-sessions on {} to read this transcript",
-                self.name()
-            )));
+        let path = match &session.locator {
+            Locator::File { path } => path,
+            Locator::Row { db, id } => return self.open_row_via_shell(session, db, id, home),
         };
         if session.size_bytes.is_none_or(|size| size > REMOTE_BODY_MAX) {
             return Err(self.fail(format!(
@@ -451,6 +478,15 @@ impl Host {
             message: message.into(),
         }
     }
+}
+
+/// `M\t<agent>` records: a store exists on the host but `sqlite3` does not,
+/// so that agent was not scanned. Neutral wording: nothing is broken.
+fn unscanned(raw: &str, host: &str) -> Vec<String> {
+    raw.lines()
+        .filter_map(|line| line.strip_prefix("M\t"))
+        .map(|agent| format!("{host}: {} not scanned (sqlite3 missing)", agent.trim()))
+        .collect()
 }
 
 /// Where a fetched remote body is cached, honouring `$XDG_CACHE_HOME`.
@@ -687,6 +723,29 @@ fn refresh(hosts: &[HostConfig], home: &Path) -> (Vec<SessionSummary>, Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_sqlite3_is_reported_neutrally_per_agent() {
+        let raw = "S\topencode\t\nM\tcopilot\nnoise from a login banner\n";
+        assert_eq!(
+            unscanned(raw, "ar-2"),
+            vec!["ar-2: copilot not scanned (sqlite3 missing)".to_string()]
+        );
+        assert!(unscanned("S\tcopilot\t\n", "ar-2").is_empty());
+    }
+
+    #[test]
+    fn every_source_is_listable_without_a_remote_binary() {
+        let home = tempfile::tempdir().unwrap();
+        for src in source::all(home.path()) {
+            let layout = src.remote_layout();
+            assert!(
+                !layout.files.is_empty() || layout.sql.is_some(),
+                "{} has no remote layout",
+                src.id().name()
+            );
+        }
+    }
 
     #[test]
     fn a_duplicate_host_is_reported_once() {
