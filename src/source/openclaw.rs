@@ -20,7 +20,7 @@
 //!
 //! Credentials (`auth*.json`, `*.lock.sqlite`, `generation-*`) are never
 //! opened — only `.jsonl` and `openclaw-agent.sqlite`, the latter read-only
-//! through [`crate::storage::sqlite::open`].
+//! through the crate's read-only SQLite opener (`storage::sqlite::open`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
