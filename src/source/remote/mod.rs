@@ -292,7 +292,10 @@ impl Host {
                 return Err(self.fail("unreadable llm-sessions show output"));
             }
         }
-        self.open_via_shell(session, home)
+        match &session.locator {
+            Locator::File { .. } => self.open_via_shell(session, home),
+            Locator::Row { .. } => self.open_via_sql(session, home),
+        }
     }
 
     /// Remote processes, for `llm-sessions top` and liveness.
@@ -393,16 +396,12 @@ impl Host {
         Ok(HostScan { sessions, failures })
     }
 
-    /// Read one row-backed session on the host with `sqlite3`, then rebuild
-    /// it with the source's own reconstruction. Only that session's rows
-    /// travel; the database stays where it is.
-    fn open_row_via_shell(
-        &self,
-        session: &SessionSummary,
-        db: &Path,
-        id: &str,
-        home: &Path,
-    ) -> Result<Transcript> {
+    /// Open a database-row session by running its per-session queries on
+    /// the host and transferring only those rows.
+    fn open_via_sql(&self, session: &SessionSummary, home: &Path) -> Result<Transcript> {
+        let Locator::Row { db, id } = &session.locator else {
+            return Err(self.fail("row locator expected"));
+        };
         let sources = source::all(home);
         let reader = source::find(&sources, session.source).ok_or(Error::Unsupported {
             agent: session.source,
@@ -426,9 +425,8 @@ impl Host {
     /// Fetch one remote body into the local cache, then hand it to the local
     /// adapter for that agent so all nine parsers are reused verbatim.
     fn open_via_shell(&self, session: &SessionSummary, home: &Path) -> Result<Transcript> {
-        let path = match &session.locator {
-            Locator::File { path } => path,
-            Locator::Row { db, id } => return self.open_row_via_shell(session, db, id, home),
+        let Locator::File { path } = &session.locator else {
+            return Err(self.fail("file locator expected"));
         };
         if session.size_bytes.is_none_or(|size| size > REMOTE_BODY_MAX) {
             return Err(self.fail(format!(
