@@ -65,6 +65,18 @@ impl Source for OpenCode {
         Some(vec!["opencode".into(), "--session".into(), id.into()])
     }
 
+    /// `opencode run` sends one message and exits; `--` ends its flags.
+    fn insert_command(&self, id: &str, message: &str) -> Option<Vec<String>> {
+        Some(vec![
+            "opencode".into(),
+            "run".into(),
+            "--session".into(),
+            id.into(),
+            "--".into(),
+            message.into(),
+        ])
+    }
+
     /// One remote `sqlite3` query answers tier 1, so there is nothing to glob.
     fn remote_layout(&self) -> RemoteLayout {
         RemoteLayout {

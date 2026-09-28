@@ -224,10 +224,22 @@ impl Source for Hermes {
         Ok(ArchiveOutcome::Native)
     }
 
-    /// unverified — confirm first: no `hermes` binary exists on this machine,
-    /// so the flag spelling comes from the store layout, not from `--help`.
+    /// Verified from `hermes --help`: `--resume SESSION`.
     fn resume_command(&self, id: &str) -> Option<Vec<String>> {
         Some(vec!["hermes".into(), "--resume".into(), id.into()])
+    }
+
+    /// `-Q` is Hermes' programmatic mode: answer the query and exit. The
+    /// `--query=` spelling keeps argparse from reading a leading `-` as a flag.
+    fn insert_command(&self, id: &str, message: &str) -> Option<Vec<String>> {
+        Some(vec![
+            "hermes".into(),
+            "chat".into(),
+            "--quiet".into(),
+            "--resume".into(),
+            id.into(),
+            format!("--query={message}"),
+        ])
     }
 
     fn remote_layout(&self) -> RemoteLayout {

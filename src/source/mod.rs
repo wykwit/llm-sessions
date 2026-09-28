@@ -52,6 +52,14 @@ pub trait Source: Send + Sync {
         None
     }
 
+    /// Headless command that appends `message` to this session as one user
+    /// turn, lets the agent answer, and exits. The message is one argv
+    /// element, never shell text. `None` means insert mode does not support
+    /// this agent.
+    fn insert_command(&self, _id: &str, _message: &str) -> Option<Vec<String>> {
+        None
+    }
+
     /// Store locations relative to a home directory, for a host this process
     /// cannot read directly. The default is "not listable without a remote
     /// `llm-sessions`", which the remote layer reports rather than guessing.
