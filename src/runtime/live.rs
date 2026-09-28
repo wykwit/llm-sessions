@@ -282,7 +282,16 @@ fn agent_of(argv: &[String]) -> Option<SourceId> {
     {
         return None;
     }
-    let name = Path::new(argv.first()?).file_name()?.to_str()?;
+    let file_name = |arg: &String| Path::new(arg).file_name()?.to_str().map(str::to_owned);
+    // A script's process is its interpreter: Hermes' launcher execs
+    // `venv/bin/python …/hermes-agent/hermes chat`, so the agent is the
+    // script, not `python`.
+    let argv = match argv.first().and_then(file_name) {
+        Some(interpreter) if interpreter.starts_with("python") => &argv[1..],
+        _ => &argv[..],
+    };
+    let name = file_name(argv.first()?)?;
+    let name = name.as_str();
     match name {
         "omp" => Some(SourceId::Omp),
         "claude" => Some(SourceId::Claude),
@@ -294,8 +303,8 @@ fn agent_of(argv: &[String]) -> Option<SourceId> {
         "goose" => Some(SourceId::Goose),
         "cursor-agent" => Some(SourceId::Cursor),
         "gemini" => Some(SourceId::Gemini),
-        // Neither binary exists on this machine, so local liveness for these
-        // two is untested; the shape is identical to the other eight.
+        // Hermes is detected through its Python launcher (see above); no
+        // `openclaw` binary exists on this machine, so its liveness is untested.
         "hermes" => Some(SourceId::Hermes),
         "openclaw" => Some(SourceId::OpenClaw),
         _ => None,
@@ -588,6 +597,23 @@ mod tests {
         fleet.refresh_from(&Proc::at(&proc_dir));
         let pids: Vec<u32> = fleet.processes().iter().map(|p| p.pid).collect();
         assert_eq!(pids, [51]);
+    }
+
+    /// Hermes runs as `python …/hermes chat`. Keyed on `argv[0]` alone, a
+    /// running Hermes looked stale — and insert mode resumed behind it.
+    #[test]
+    fn an_agent_run_by_its_interpreter_is_still_that_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_dir = dir.path().join("60");
+        std::fs::create_dir_all(pid_dir.join("fd")).unwrap();
+        std::fs::write(
+            pid_dir.join("cmdline"),
+            b"/home/u/.hermes/hermes-agent/venv/bin/python\0/home/u/.hermes/hermes-agent/hermes\0chat\0",
+        )
+        .unwrap();
+        let mut fleet = Fleet::default();
+        fleet.refresh_from(&Proc::at(dir.path()));
+        assert_eq!(fleet.get(60).map(|p| p.agent), Some(SourceId::Hermes));
     }
 
     /// `std` exposes no `getppid` and the crate takes no new dependencies, so
