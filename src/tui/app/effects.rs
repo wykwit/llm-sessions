@@ -1,12 +1,12 @@
 //! The parts of [`App`] that reach outside its own state: writing archive
 //! flags through a source or the overlay, building the argv a resume hands
-//! to the shell, moving tmux focus, and reading a transcript body through
-//! its source or host.
+//! to the shell, handing an insert-mode message to an agent's CLI, moving
+//! tmux focus, and reading a transcript body through its source or host.
 
-use crate::model::{ArchiveOutcome, SourceId};
+use crate::model::{ArchiveOutcome, Liveness, SessionSummary, SourceId};
 use crate::output::reader::plural;
-use crate::runtime::tmux;
-use crate::tui::app::{App, fingerprint};
+use crate::runtime::{insert, tmux};
+use crate::tui::app::{App, Prompt, fingerprint};
 
 impl App {
     pub(super) fn apply_archive(&mut self, archive: bool) {
@@ -97,6 +97,103 @@ impl App {
                 self.quit = true;
             }
             None => self.status = Some(format!("{source_id} has no resume command")),
+        }
+    }
+}
+
+impl App {
+    pub(super) fn start_insert(&mut self) {
+        let Some(session) = self.selected_session() else {
+            self.status = Some("nothing selected to send to".into());
+            return;
+        };
+        if let Some(refusal) = self.insert_refusal(session) {
+            self.status = Some(refusal);
+            return;
+        }
+        self.prompt = Prompt::Insert {
+            target: (session.source, session.id.clone()),
+            text: String::new(),
+        };
+    }
+
+    /// The target is re-checked: it may have gone live while the message
+    /// was being typed.
+    pub(super) fn send_insert(&mut self, target: &(SourceId, String), text: &str) {
+        let message = text.trim();
+        if message.is_empty() {
+            self.status = Some("empty message; nothing sent".into());
+            return;
+        }
+        let Some(session) = self
+            .sessions
+            .iter()
+            .find(|s| s.host.is_none() && s.source == target.0 && s.id == target.1)
+        else {
+            self.status = Some("that session is gone; nothing sent".into());
+            return;
+        };
+        if let Some(refusal) = self.insert_refusal(session) {
+            self.status = Some(refusal);
+            return;
+        }
+        let Some(command) = crate::source::find(&self.sources, session.source)
+            .and_then(|source| source.insert_command(&session.id, message))
+        else {
+            return;
+        };
+        // The agent resolves some sessions relative to the project it was
+        // started in, so it runs where the session did, when that still exists.
+        let cwd = [&session.recorded_cwd, &session.workspace]
+            .into_iter()
+            .flatten()
+            .find(|dir| dir.is_dir())
+            .cloned();
+        let label = format!("{} {}", session.source, session.id);
+        self.status = Some(format!("sending to {label}…"));
+        self.deliveries.push(insert::send(label, command, cwd));
+    }
+
+    /// Why `session` cannot take an inserted message, if it cannot.
+    fn insert_refusal(&self, session: &SessionSummary) -> Option<String> {
+        if self.read_only {
+            return Some("--read-only: refusing to send messages".into());
+        }
+        if session.host.is_some() {
+            return Some("insert mode sends to local sessions only".into());
+        }
+        if session.subagent {
+            return Some("a subagent takes messages from its parent, not from here".into());
+        }
+        // An agent holding the file open owns the conversation in memory: a
+        // second writer would fork it behind the running instance's back.
+        if let Liveness::Live { pid } = session.liveness {
+            return Some(format!("session is open in pid {pid}; J jumps to its pane"));
+        }
+        let supported = crate::source::find(&self.sources, session.source)
+            .is_some_and(|source| source.insert_command(&session.id, "").is_some());
+        (!supported).then(|| format!("insert mode does not support {} yet", session.source))
+    }
+
+    /// Report every message whose agent has exited since the last look.
+    pub(super) fn collect_deliveries(&mut self) {
+        let mut reports = Vec::new();
+        self.deliveries.retain(|delivery| match delivery.poll() {
+            None => true,
+            Some(Ok(())) => {
+                reports.push(format!("{}: message delivered", delivery.label));
+                false
+            }
+            Some(Err(reason)) => {
+                reports.push(format!("{}: send failed: {reason}", delivery.label));
+                false
+            }
+        });
+        if !reports.is_empty() {
+            self.status = Some(reports.join(" · "));
+            // The agent wrote a turn; show it without waiting for the timer.
+            self.rescan();
+            self.reload_if_changed();
         }
     }
 }
