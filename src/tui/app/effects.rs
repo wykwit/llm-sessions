@@ -107,7 +107,7 @@ impl App {
             self.status = Some("nothing selected to send to".into());
             return;
         };
-        if let Some(refusal) = self.insert_refusal(session) {
+        if let Err(refusal) = self.insert_route(session, "") {
             self.status = Some(refusal);
             return;
         }
@@ -117,8 +117,8 @@ impl App {
         };
     }
 
-    /// The target is re-checked: it may have gone live while the message
-    /// was being typed.
+    /// The route is chosen again on send: the session may have gone live,
+    /// or gone quiet, while the message was being typed.
     pub(super) fn send_insert(&mut self, target: &(SourceId, String), text: &str) {
         let message = text.trim();
         if message.is_empty() {
@@ -133,14 +133,12 @@ impl App {
             self.status = Some("that session is gone; nothing sent".into());
             return;
         };
-        if let Some(refusal) = self.insert_refusal(session) {
-            self.status = Some(refusal);
-            return;
-        }
-        let Some(command) = crate::source::find(&self.sources, session.source)
-            .and_then(|source| source.insert_command(&session.id, message))
-        else {
-            return;
+        let command = match self.insert_route(session, message) {
+            Ok(command) => command,
+            Err(refusal) => {
+                self.status = Some(refusal);
+                return;
+            }
         };
         // The agent resolves some sessions relative to the project it was
         // started in, so it runs where the session did, when that still exists.
@@ -154,25 +152,48 @@ impl App {
         self.deliveries.push(insert::send(label, command, cwd));
     }
 
-    /// Why `session` cannot take an inserted message, if it cannot.
-    fn insert_refusal(&self, session: &SessionSummary) -> Option<String> {
+    /// The command that delivers `message` to `session`, or why none may.
+    ///
+    /// One writer per conversation: with any process attached — exact or
+    /// inferred, since an inferred owner may well hold it in memory — the
+    /// message must go through that process or not at all. Resuming is for
+    /// sessions nothing is running.
+    fn insert_route(&self, session: &SessionSummary, message: &str) -> Result<Vec<String>, String> {
         if self.read_only {
-            return Some("--read-only: refusing to send messages".into());
+            return Err("--read-only: refusing to send messages".into());
         }
         if session.host.is_some() {
-            return Some("insert mode sends to local sessions only".into());
+            return Err("insert mode sends to local sessions only".into());
         }
         if session.subagent {
-            return Some("a subagent takes messages from its parent, not from here".into());
+            return Err("a subagent takes messages from its parent, not from here".into());
         }
-        // An agent holding the file open owns the conversation in memory: a
-        // second writer would fork it behind the running instance's back.
-        if let Liveness::Live { pid } = session.liveness {
-            return Some(format!("session is open in pid {pid}; J jumps to its pane"));
-        }
-        let supported = crate::source::find(&self.sources, session.source)
-            .is_some_and(|source| source.insert_command(&session.id, "").is_some());
-        (!supported).then(|| format!("insert mode does not support {} yet", session.source))
+        let source = crate::source::find(&self.sources, session.source);
+        let Some(pid) = session.liveness.pid() else {
+            return source
+                .and_then(|source| source.insert_command(&session.id, message))
+                .ok_or_else(|| format!("insert mode does not support {} yet", session.source));
+        };
+        let held = if matches!(session.liveness, Liveness::Live { .. }) {
+            "is open"
+        } else {
+            "may be open"
+        };
+        let Some(process) = self.fleet.get(pid) else {
+            return Err(format!(
+                "session {held} in pid {pid}, which is gone; Ctrl-R rescans"
+            ));
+        };
+        source
+            .and_then(|source| source.live_insert_command(&session.id, message, &process.argv))
+            .ok_or_else(|| {
+                let jump = if process.pane.is_some() {
+                    "; J jumps to its pane"
+                } else {
+                    ""
+                };
+                format!("session {held} in pid {pid}, which cannot take a message from here{jump}")
+            })
     }
 
     /// Report every message whose agent has exited since the last look.

@@ -47,10 +47,7 @@ const HELP: &[(&str, &str)] = &[
     ("t / o / c", "Toggle thinking / tool output / changed files"),
     ("f", "Follow new transcript content"),
     ("r", "Quit and print the resume command"),
-    (
-        "i",
-        "Insert: send one message to the selected session",
-    ),
+    ("i", "Insert: send one message to the selected session"),
     ("m <letter>", "Bookmark the selected session, view and pane"),
     ("' <letter> or ` <letter>", "Jump back to a bookmark"),
     ("J", "Jump to the selected session's tmux pane"),
