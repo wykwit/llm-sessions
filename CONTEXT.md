@@ -43,7 +43,10 @@ line here when a module is named after a concept not yet listed.
   fold, resize, confirm, insert). Key meanings live in `tui::keymap`'s single
   dispatch; state transitions live in App.
 - **Insert mode** (`runtime::insert`) — one typed message handed to the
-  session's agent through `Source::insert_command`, its headless CLI, run off
-  the UI thread. The agent writes the turn; `llm-sessions` only reports the exit.
+  session's agent through its CLI, run off the UI thread. One writer per
+  conversation: a session with a process attached (exact or inferred) goes
+  through `Source::live_insert_command` or is refused; only an unattended one
+  is resumed with `Source::insert_command`. The agent writes the turn;
+  `llm-sessions` only reports the exit.
 - **Query** (`catalog::query`) — the filter grammar and visibility policy shared
   by `/`, `s`, and `list -q`, independent of TUI grouping and navigation.

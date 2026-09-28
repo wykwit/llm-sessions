@@ -134,12 +134,21 @@ archiving, indexing, tmux focus changes, and saving bookmarks.
 it into your shell. Don't run it via `$(llm-sessions)`: command substitution
 doesn't interpret the quoting.
 
-`i` runs the agent's own one-shot command in the session's directory —
-`omp --print --resume <id> -- <msg>`, `opencode run --session <id> -- <msg>`,
-`hermes chat --quiet --resume <id> --query=<msg>` — off the UI thread, and
-reports the exit on the status line. The message is one argv element, never
-shell text. Refused for sessions a process holds open (`●`; send there with
-`J`), subagents, remote rows, and under `--read-only`.
+`i` runs the agent's own one-shot command in the session's directory, off
+the UI thread, and reports the exit on the status line. The message is one
+argv element, never shell text. Each conversation keeps one writer:
+
+- **OMP, Hermes** resume only a session nothing is running —
+  `omp --print --resume <id> -- <msg>`,
+  `hermes chat --quiet --resume <id> --query=<msg>`. A session with any
+  process attached, `●` or `○`, is refused (`J` jumps to its pane).
+- **OpenCode** always sends `opencode run --session <id> -- <msg>` through
+  the server that owns the session: the shared background service, which
+  default clients use and which starts on demand, or a live client's
+  `--server <url>`. A live `--standalone` client's private server can't be
+  reached, so that is refused.
+
+Subagents, remote rows, and `--read-only` are refused too.
 
 ## Liveness
 
