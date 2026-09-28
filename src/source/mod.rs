@@ -53,10 +53,24 @@ pub trait Source: Send + Sync {
     }
 
     /// Headless command that appends `message` to this session as one user
-    /// turn, lets the agent answer, and exits. The message is one argv
-    /// element, never shell text. `None` means insert mode does not support
-    /// this agent.
+    /// turn, lets the agent answer, and exits. Used only when no process is
+    /// attached to the session: resuming one an agent holds in memory would
+    /// fork its history. The message is one argv element, never shell text.
+    /// `None` means insert mode does not support this agent.
     fn insert_command(&self, _id: &str, _message: &str) -> Option<Vec<String>> {
+        None
+    }
+
+    /// Command that hands `message` to the running process — started as
+    /// `owner` — that holds or may hold this session, so that process stays
+    /// its only writer. `None` means it cannot be reached from here and the
+    /// message is refused.
+    fn live_insert_command(
+        &self,
+        _id: &str,
+        _message: &str,
+        _owner: &[String],
+    ) -> Option<Vec<String>> {
         None
     }
 
