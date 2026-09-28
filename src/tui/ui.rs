@@ -49,7 +49,7 @@ const HELP: &[(&str, &str)] = &[
     ("r", "Quit and print the resume command"),
     (
         "i",
-        "Insert: send one message to the selected session (omp, opencode, hermes)",
+        "Insert: send one message to the selected session",
     ),
     ("m <letter>", "Bookmark the selected session, view and pane"),
     ("' <letter> or ` <letter>", "Jump back to a bookmark"),

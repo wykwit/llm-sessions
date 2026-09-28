@@ -33,6 +33,8 @@ deliberately: liveness reads `/proc`, and nothing else is tested.
 - `/` filters by title, path, or agent; `s` full-text search (needs
   `llm-sessions index`); `x` clears.
 - `Ctrl-W o` fullscreen reader; `?` lists every key.
+- `i` insert mode: type one message and `Enter` hands it to the selected
+  session's agent (OMP, OpenCode, Hermes) through its headless CLI.
 
 ## Sources
 
@@ -123,6 +125,7 @@ archiving, indexing, tmux focus changes, and saving bookmarks.
 | `t` `o` `c` | unfold thinking / tool output / changed files |
 | `Ctrl-W o` `F11` | fullscreen reader (`Ctrl-W ←` `→` resize, `=` reset) |
 | `r` | quit, printing the resume command |
+| `i` | insert: send one message to the selected session |
 | `m` `'` `` ` `` | set / jump to bookmarks |
 | `?` `F1` | help |
 | `q` / `Q` `Ctrl-C` | back / quit |
@@ -130,6 +133,13 @@ archiving, indexing, tmux focus changes, and saving bookmarks.
 `r` prints a shell-quoted resume command to stdout — inspect it, then paste
 it into your shell. Don't run it via `$(llm-sessions)`: command substitution
 doesn't interpret the quoting.
+
+`i` runs the agent's own one-shot command in the session's directory —
+`omp --print --resume <id> -- <msg>`, `opencode run --session <id> -- <msg>`,
+`hermes chat --quiet --resume <id> --query=<msg>` — off the UI thread, and
+reports the exit on the status line. The message is one argv element, never
+shell text. Refused for sessions a process holds open (`●`; send there with
+`J`), subagents, remote rows, and under `--read-only`.
 
 ## Liveness
 
@@ -186,7 +196,9 @@ text — a typo narrows results, never fails.
   raw-JSON blocks; a session never fails to open.
 - **Agent stores are read-only.** The only writes are archiving (one
   `UPDATE` where the agent models it natively, an overlay db otherwise)
-  and `llm-sessions`'s own databases. Credential files are never opened.
+  and `llm-sessions`'s own databases. Insert mode never writes a store
+  either: the agent's CLI records its own turn. Credential files are
+  never opened.
 
 ### Source layout
 
