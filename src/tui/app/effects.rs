@@ -196,7 +196,7 @@ impl App {
             ));
         };
         source
-            .and_then(|source| source.live_insert_command(&session.id, message, &process.argv))
+            .and_then(|source| source.live_insert_command(&session.id, message, &process.servers))
             .ok_or_else(|| {
                 let jump = if process.pane.is_some() {
                     "; J jumps to its pane"

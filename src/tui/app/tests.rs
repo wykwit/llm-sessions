@@ -1251,14 +1251,9 @@ impl Source for Recorder {
     fn insert_command(&self, id: &str, message: &str) -> Option<Vec<String>> {
         Some(self.record(&format!("resume {id}"), message))
     }
-    fn live_insert_command(
-        &self,
-        id: &str,
-        message: &str,
-        owner: &[String],
-    ) -> Option<Vec<String>> {
+    fn live_insert_command(&self, id: &str, message: &str, servers: &[u16]) -> Option<Vec<String>> {
         self.live
-            .then(|| self.record(&format!("{id} via {}", owner.join(" ")), message))
+            .then(|| self.record(&format!("{id} via {servers:?}"), message))
     }
 }
 
@@ -1277,12 +1272,42 @@ fn recorder_app(out: &Path, live: bool, session: SessionSummary, fleet: Fleet) -
     )
 }
 
-/// A fleet holding one agent process, read from a fake `/proc`.
-fn fleet_with(pid: u32, argv: &str) -> Fleet {
+/// A fleet holding one agent process, read from a fake `/proc`; with
+/// `server`, the process holds a connection to a loopback server listening
+/// on that port.
+fn fleet_with(pid: u32, argv: &str, server: Option<u16>) -> Fleet {
     let dir = tempfile::tempdir().unwrap();
     let pid_dir = dir.path().join(pid.to_string());
-    std::fs::create_dir_all(&pid_dir).unwrap();
+    std::fs::create_dir_all(pid_dir.join("fd")).unwrap();
     std::fs::write(pid_dir.join("cmdline"), argv.replace(' ', "\0")).unwrap();
+    if let Some(port) = server {
+        std::fs::create_dir(dir.path().join("net")).unwrap();
+        let row = |sl, local: &str, remote: &str, state, inode| {
+            format!("{sl}: {local} {remote} {state} 0:0 0:0 0 1000 0 {inode} 1 0\n")
+        };
+        std::fs::write(
+            dir.path().join("net/tcp"),
+            format!(
+                "header\n{}{}",
+                row(
+                    0,
+                    &format!("0100007F:{port:04X}"),
+                    "00000000:0000",
+                    "0A",
+                    76
+                ),
+                row(
+                    1,
+                    "0100007F:D6D8",
+                    &format!("0100007F:{port:04X}"),
+                    "01",
+                    77
+                ),
+            ),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("socket:[77]", pid_dir.join("fd/3")).unwrap();
+    }
     let mut fleet = Fleet::default();
     fleet.refresh_from(&crate::runtime::procfs::Proc::at(dir.path()));
     assert!(fleet.get(pid).is_some(), "{argv} is not an agent");
@@ -1331,9 +1356,10 @@ fn insert_mode_reaches_a_running_session_through_its_owner() {
     let out = std::env::temp_dir().join(format!("llm-sessions-insert-live-{}", std::process::id()));
     let mut session = recent(SourceId::Omp, "a", "", 1);
     session.liveness = Liveness::Probably { pid: 42 };
-    let mut app = recorder_app(&out, true, session, fleet_with(42, "omp --model x"));
+    let fleet = fleet_with(42, "omp --model x", Some(49374));
+    let mut app = recorder_app(&out, true, session, fleet);
     send_and_wait(&mut app, "hi");
-    assert_eq!(take(&out), "a via omp --model x|hi");
+    assert_eq!(take(&out), "a via [49374]|hi");
 }
 
 #[test]
@@ -1352,7 +1378,7 @@ fn insert_mode_refuses_sessions_it_must_not_write_behind() {
         (stale(), true, "--read-only"),
     ] {
         // This agent has no way into a running instance.
-        let mut app = recorder_app(&out, false, session, fleet_with(42, "omp"));
+        let mut app = recorder_app(&out, false, session, fleet_with(42, "omp", None));
         app.set_read_only(read_only);
         app.handle(Action::StartInsert);
         assert_eq!(app.prompt(), &Prompt::None);

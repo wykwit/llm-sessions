@@ -65,31 +65,28 @@ impl Source for OpenCode {
         Some(vec!["opencode".into(), "--session".into(), id.into()])
     }
 
-    /// `opencode run` sends one message and exits. It goes through the
-    /// shared background service (`opencode serve --service`, started on
-    /// demand), the same server a TUI uses unless it was launched with
-    /// `--standalone` — so the service, not us, is the session's one writer.
+    /// Nothing is running the session, so `opencode run` may own it for one
+    /// message: it answers and exits. `--` ends its flags, so a message
+    /// starting with `-` stays a message.
     fn insert_command(&self, id: &str, message: &str) -> Option<Vec<String>> {
         Some(run_command(id, message, None))
     }
 
-    /// A running client is reached through the server it talks to: the shared
-    /// service by default, or its `--server <url>`. A `--standalone` client's
-    /// private server announces no address, so it cannot be reached.
-    fn live_insert_command(
-        &self,
-        id: &str,
-        message: &str,
-        owner: &[String],
-    ) -> Option<Vec<String>> {
-        if owner.iter().any(|arg| arg == "--standalone") {
+    /// A running client is reached through the one server it is connected
+    /// to — the shared `opencode serve --service` for a v2 client, the
+    /// in-process server for a v1 TUI. The server comes from the client's
+    /// sockets, not its flags: flag spellings differ between versions, and a
+    /// guessed server would be a second writer. No server, or several to
+    /// choose from, is refused.
+    fn live_insert_command(&self, id: &str, message: &str, servers: &[u16]) -> Option<Vec<String>> {
+        let [port] = servers else {
             return None;
-        }
-        let server = owner.iter().enumerate().find_map(|(i, arg)| {
-            arg.strip_prefix("--server=")
-                .or_else(|| (arg == "--server").then(|| owner.get(i + 1).map(String::as_str))?)
-        });
-        Some(run_command(id, message, server))
+        };
+        Some(run_command(
+            id,
+            message,
+            Some(&format!("http://127.0.0.1:{port}")),
+        ))
     }
 
     /// One remote `sqlite3` query answers tier 1, so there is nothing to glob.
@@ -104,8 +101,8 @@ impl Source for OpenCode {
     }
 }
 
-/// `opencode run --session <id> [--server <url>] -- <message>`; `--` ends
-/// its flags, so a message starting with `-` stays a message.
+/// `opencode run --session <id> [--server <url>] -- <message>`, the
+/// spelling of `opencode run --help` in 2.0.18.
 fn run_command(id: &str, message: &str, server: Option<&str>) -> Vec<String> {
     let mut command = vec![
         "opencode".to_owned(),
@@ -124,34 +121,26 @@ fn run_command(id: &str, message: &str, server: Option<&str>) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn argv(args: &[&str]) -> Vec<String> {
-        args.iter().map(|&arg| arg.to_owned()).collect()
-    }
-
-    /// The message must reach the server the running client talks to; a
-    /// different one would be a second writer on the same session.
+    /// The message must reach the server the running client is connected
+    /// to; any other would be a second writer on the same session.
     #[test]
-    fn a_live_client_is_reached_through_its_own_server() {
+    fn a_live_client_is_reached_only_through_its_one_server() {
         let opencode = OpenCode::new(Path::new("/home/u"));
-        let send = |owner: &[&str]| opencode.live_insert_command("ses_1", "hi", &argv(owner));
-        let shared = argv(&["opencode", "run", "--session", "ses_1", "--", "hi"]);
-        assert_eq!(send(&["/usr/bin/opencode"]), Some(shared.clone()));
-        assert_eq!(send(&["opencode", "-s", "ses_1"]), Some(shared));
-        let pinned = argv(&[
-            "opencode",
-            "run",
-            "--session",
-            "ses_1",
-            "--server",
-            "http://h:1",
-            "--",
-            "hi",
-        ]);
+        let send = |servers: &[u16]| opencode.live_insert_command("ses_1", "hi", servers);
         assert_eq!(
-            send(&["opencode", "--server", "http://h:1"]),
-            Some(pinned.clone())
+            send(&[49374]).unwrap(),
+            [
+                "opencode",
+                "run",
+                "--session",
+                "ses_1",
+                "--server",
+                "http://127.0.0.1:49374",
+                "--",
+                "hi"
+            ]
         );
-        assert_eq!(send(&["opencode", "--server=http://h:1"]), Some(pinned));
-        assert_eq!(send(&["opencode", "--standalone"]), None);
+        assert_eq!(send(&[]), None, "no known server");
+        assert_eq!(send(&[49374, 8080]), None, "ambiguous");
     }
 }

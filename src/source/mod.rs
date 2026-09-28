@@ -61,15 +61,16 @@ pub trait Source: Send + Sync {
         None
     }
 
-    /// Command that hands `message` to the running process — started as
-    /// `owner` — that holds or may hold this session, so that process stays
-    /// its only writer. `None` means it cannot be reached from here and the
-    /// message is refused.
+    /// Command that hands `message` to the running process that holds or
+    /// may hold this session, so that process stays its only writer.
+    /// `servers` are the loopback ports of listening servers that process is
+    /// connected to, read from the kernel. `None` means it cannot be reached
+    /// from here and the message is refused.
     fn live_insert_command(
         &self,
         _id: &str,
         _message: &str,
-        _owner: &[String],
+        _servers: &[u16],
     ) -> Option<Vec<String>> {
         None
     }
