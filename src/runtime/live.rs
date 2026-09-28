@@ -66,6 +66,9 @@ pub struct Process {
     pub pid: u32,
     pub agent: SourceId,
     pub cwd: Option<PathBuf>,
+    /// The command line it was started with; insert mode reads which server
+    /// an `OpenCode` client talks to from it.
+    pub argv: Vec<String>,
     /// Session transcripts this process currently holds open.
     pub open_sessions: Vec<PathBuf>,
     pub pane: Option<Pane>,
@@ -114,7 +117,10 @@ impl Fleet {
         // Unknown process inventory cannot support a live claim; fall back
         // to recency rather than treating an unreadable tree as process facts.
         for pid in proc.pids().unwrap_or_default() {
-            let Some(agent) = agent_of(proc, pid) else {
+            let Some(argv) = proc.argv(pid) else {
+                continue;
+            };
+            let Some(agent) = agent_of(&argv) else {
                 continue;
             };
             let ticks = proc.stat(pid).map_or(0, |stat| stat.ticks);
@@ -133,6 +139,7 @@ impl Fleet {
                 pid,
                 agent,
                 cwd: proc.cwd(pid),
+                argv,
                 open_sessions: open_files(proc, pid),
                 pane: pane_for(proc, pid, &pane_by_pid).cloned(),
                 activity,
@@ -268,8 +275,7 @@ fn age(updated: time::OffsetDateTime, now: time::OffsetDateTime) -> Duration {
 /// and are excluded by their marker argument — they own no session and would
 /// otherwise claim one by cwd. `OpenCode` v2's shared background server
 /// (`opencode serve --service`, running from `$HOME`) is one of them.
-fn agent_of(proc: &Proc, pid: u32) -> Option<SourceId> {
-    let argv = proc.argv(pid)?;
+fn agent_of(argv: &[String]) -> Option<SourceId> {
     if argv
         .iter()
         .any(|arg| arg.starts_with("__omp_worker") || arg == "daemon")
@@ -381,6 +387,7 @@ mod tests {
             pid,
             agent,
             cwd: Some(PathBuf::from(cwd)),
+            argv: Vec::new(),
             open_sessions: open.iter().map(PathBuf::from).collect(),
             pane: None,
             activity: Activity::Unknown,
