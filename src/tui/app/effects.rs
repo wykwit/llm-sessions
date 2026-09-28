@@ -3,6 +3,8 @@
 //! to the shell, handing an insert-mode message to an agent's CLI, moving
 //! tmux focus, and reading a transcript body through its source or host.
 
+use std::time::Duration;
+
 use crate::model::{ArchiveOutcome, Liveness, SessionSummary, SourceId};
 use crate::output::reader::plural;
 use crate::runtime::{insert, tmux};
@@ -101,6 +103,11 @@ impl App {
     }
 }
 
+/// Longest an agent CLI may take over one inserted turn before it is killed.
+/// Generous: a turn that runs tools can legitimately take many minutes, and
+/// the pid is on the status line for anyone who wants it gone sooner.
+const INSERT_DEADLINE: Duration = Duration::from_mins(30);
+
 impl App {
     pub(super) fn start_insert(&mut self) {
         let Some(session) = self.selected_session() else {
@@ -148,8 +155,12 @@ impl App {
             .find(|dir| dir.is_dir())
             .cloned();
         let label = format!("{} {}", session.source, session.id);
-        self.status = Some(format!("sending to {label}…"));
-        self.deliveries.push(insert::send(label, command, cwd));
+        let delivery = insert::send(label, &command, cwd, INSERT_DEADLINE);
+        self.status = Some(match delivery.pid {
+            Some(pid) => format!("sending to {} (pid {pid})…", delivery.label),
+            None => format!("sending to {}…", delivery.label),
+        });
+        self.deliveries.push(delivery);
     }
 
     /// The command that delivers `message` to `session`, or why none may.
