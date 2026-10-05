@@ -39,6 +39,10 @@ line here when a module is named after a concept not yet listed.
   keeps one and rescans on a timer.
 - **Fleet / liveness** — which sessions are live right now: exact (fd held
   open), inferred (right agent + cwd), or recent-write.
+- **Status** (`runtime::status`) — the derived five-state view of a session
+  (running, idle, waiting for approval or input, failed, done): liveness and
+  CPU activity joined with the transcript tail, debounced by `settle`. Needs
+  a tier-2 read, so it is derived for watched sessions, never for a listing.
 - **Overlay** — `llm-sessions`-owned store of archive state for agents without
   native archiving.
 - **Index** — the disposable FTS5 body-search cache plus derived usage/prompt
