@@ -49,6 +49,11 @@ pub enum Command {
     /// Summarize recorded spend.
     #[command(display_order = 7)]
     Usage(UsageArgs),
+    /// Serve this machine's sessions over a read-only, token-authenticated
+    /// HTTP and WebSocket API.
+    #[cfg(feature = "serve")]
+    #[command(display_order = 8)]
+    Serve(ServeArgs),
     /// Build or update the full-text search index. Indexes local sessions
     /// only: fetching remote bodies would mean one ssh per session.
     #[command(display_order = 9)]
@@ -256,6 +261,65 @@ pub struct TopArgs {
     /// Emit JSON instead of a table.
     #[arg(long)]
     pub json: bool,
+}
+
+#[cfg(feature = "serve")]
+#[derive(Debug, Clone, clap::Args)]
+#[command(after_long_help = "Routes, all GET:\n  \
+    /v1/healthz                    liveness probe, no token\n  \
+    /v1/sessions?q=QUERY&limit=N   rows as `list --json`, plus a derived `status`\n  \
+    /v1/sessions/ID                one row; ID may be a unique prefix\n  \
+    /v1/sessions/ID/transcript     the bytes of `show ID --json`\n  \
+    /v1/stream                     WebSocket: live and recent rows, pushed on change\n\n\
+    Read-only by construction: no route archives, indexes, edits hosts, or\n\
+    reaches a terminal. Clients send `Authorization: Bearer TOKEN`; /v1/stream\n\
+    also takes `?token=TOKEN`. There is no TLS: off loopback, put a TLS\n\
+    reverse proxy in front.")]
+pub struct ServeArgs {
+    /// Address to listen on. Only a loopback address may use --no-auth.
+    #[arg(long, env = "LLMS_BIND", default_value = "127.0.0.1:8787")]
+    pub bind: std::net::SocketAddr,
+
+    /// Shared secret clients must present. Required unless --no-auth.
+    #[arg(long, env = "LLMS_TOKEN", hide_env_values = true)]
+    pub token: Option<String>,
+
+    /// Serve without a token. Refused unless --bind is a loopback address.
+    #[arg(long, conflicts_with = "token")]
+    pub no_auth: bool,
+
+    /// Host name /v1/healthz reports [default: system hostname, lowercased].
+    #[arg(long, value_name = "NAME")]
+    pub host_name: Option<String>,
+
+    /// Seconds between rescans.
+    #[arg(long, value_name = "N", default_value_t = 3,
+          value_parser = clap::value_parser!(u64).range(1..))]
+    pub poll_secs: u64,
+
+    /// Sessions written within this many hours get a derived status even
+    /// with no agent attached. Live sessions always do.
+    #[arg(long, value_name = "HOURS", default_value_t = 1)]
+    pub status_window: u64,
+
+    /// Only sessions from this agent. Repeatable.
+    #[arg(long = "source", value_name = "AGENT", value_parser = parse_source)]
+    pub sources: Vec<llm_sessions::SourceId>,
+
+    /// Base query every published row must match, in the `list -q` grammar.
+    #[arg(long, short = 'q')]
+    pub query: Option<String>,
+}
+
+#[cfg(feature = "serve")]
+fn parse_source(name: &str) -> Result<llm_sessions::SourceId, String> {
+    llm_sessions::SourceId::parse(&name.to_lowercase()).ok_or_else(|| {
+        let known: Vec<&str> = llm_sessions::SourceId::ALL
+            .iter()
+            .map(|id| id.name())
+            .collect();
+        format!("unknown agent; one of: {}", known.join(", "))
+    })
 }
 
 #[derive(Debug, Clone, clap::Args)]

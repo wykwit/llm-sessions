@@ -43,6 +43,10 @@ line here when a module is named after a concept not yet listed.
   (running, idle, waiting for approval or input, failed, done): liveness and
   CPU activity joined with the transcript tail, debounced by `settle`. Needs
   a tier-2 read, so it is derived for watched sessions, never for a listing.
+- **Serve** (`serve`, feature `serve`) — the read-only HTTP/WebSocket API:
+  a poller owns a `Loader`, rescans on a timer and publishes immutable
+  snapshots; handlers only read them. GET routes and one WebSocket, nothing
+  else, so read-only holds by construction rather than by a flag.
 - **Overlay** — `llm-sessions`-owned store of archive state for agents without
   native archiving.
 - **Index** — the disposable FTS5 body-search cache plus derived usage/prompt

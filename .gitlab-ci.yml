@@ -59,6 +59,15 @@ doc:
   script:
     - cargo doc --no-deps --document-private-items --locked
 
+# The lean build: no `serve` feature, so no tokio or axum. Checked on its own
+# so code outside `src/serve/` cannot start depending on them unnoticed.
+lean:
+  stage: test
+  extends: .non_tag
+  script:
+    - cargo clippy --all-targets --no-default-features -- -D warnings
+    - cargo test --all-targets --no-default-features
+
 test:
   stage: test
   extends: .non_tag

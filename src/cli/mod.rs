@@ -59,6 +59,20 @@ pub fn run() -> Result<()> {
         Some(Command::Digest(args)) => report::digest(&home, &args),
         Some(Command::Top(args)) => top::run(&home, &args),
         Some(Command::Usage(args)) => report::usage(&home, &args),
+        #[cfg(feature = "serve")]
+        Some(Command::Serve(args)) => llm_sessions::serve::run(
+            &home,
+            llm_sessions::serve::Config {
+                bind: args.bind,
+                token: args.token,
+                no_auth: args.no_auth,
+                host_name: args.host_name,
+                poll: std::time::Duration::from_secs(args.poll_secs),
+                status_window: std::time::Duration::from_hours(args.status_window),
+                sources: args.sources,
+                query: args.query,
+            },
+        ),
         Some(Command::Doctor(args)) => report::doctor(&home, &args),
         Some(Command::Completions(args)) => {
             let mut command = <Cli as clap::CommandFactory>::command();
