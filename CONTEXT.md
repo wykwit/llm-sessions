@@ -32,6 +32,11 @@ line here when a module is named after a concept not yet listed.
 - **Report rows** (`output::report`) — a `SessionSummary` as text a person
   reads: the `list` line and the `{field}` template, shared by every
   printing subcommand.
+- **Loader** (`catalog::loader`) — the inputs of a scan (local adapters,
+  archive overlay, configured hosts) assembled once, plus the lookups every
+  frontend runs on its result: opening a listed session with tier-1 title and
+  workspace, id/prefix resolution, `body:` hits. The CLI scans once; `serve`
+  keeps one and rescans on a timer.
 - **Fleet / liveness** — which sessions are live right now: exact (fd held
   open), inferred (right agent + cwd), or recent-write.
 - **Overlay** — `llm-sessions`-owned store of archive state for agents without
