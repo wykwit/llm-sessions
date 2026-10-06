@@ -121,7 +121,9 @@ async fn healthz(State(app): State<Arc<App>>) -> Json<serde_json::Value> {
 #[derive(Deserialize)]
 struct ListQuery {
     q: Option<String>,
-    limit: Option<usize>,
+    /// A string on purpose: `limit=abc` must be a JSON 400 of our own, not
+    /// axum's plain-text extractor rejection.
+    limit: Option<String>,
 }
 
 /// `list --json` over HTTP: the same grammar, visibility and order.
@@ -129,6 +131,19 @@ async fn sessions(
     State(app): State<Arc<App>>,
     Query(params): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let limit = match params.limit.as_deref() {
+        None => DEFAULT_LIMIT,
+        Some(text) => match text.parse::<usize>() {
+            Ok(0) => usize::MAX,
+            Ok(n) => n,
+            Err(_) => {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid limit {text:?}: use a non-negative integer"),
+                ));
+            }
+        },
+    };
     let text = params.q.unwrap_or_default();
     let query = query::Query::parse(&text);
     let hits = if query.needs_index() {
@@ -157,10 +172,6 @@ async fn sessions(
         hits: hits.as_ref(),
         show_archived: false,
         live_only: false,
-    };
-    let limit = match params.limit.unwrap_or(DEFAULT_LIMIT) {
-        0 => usize::MAX,
-        n => n,
     };
     let snapshot = app.snapshot.borrow().clone();
     let rows: Vec<_> = snapshot
@@ -577,6 +588,30 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&home);
         drop((tx, stop));
+    }
+
+    /// A limit the query string cannot deserialize used to answer axum's
+    /// plain-text extractor rejection, breaking the error shape; the
+    /// handler parses it now.
+    #[tokio::test]
+    async fn a_bad_limit_is_a_json_error_not_an_extractor_rejection() {
+        let Harness { app, .. } = harness();
+        for limit in ["abc", "-1", "99999999999999999999999"] {
+            let response = call(
+                &app,
+                Method::GET,
+                &format!("/v1/sessions?limit={limit}"),
+                Some("Bearer s3cret"),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{limit}");
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes)
+                .expect("every error is a JSON object with an error field");
+            assert!(body["error"].as_str().unwrap().contains("limit"), "{body}");
+        }
     }
 
     #[tokio::test]
