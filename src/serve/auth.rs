@@ -93,7 +93,11 @@ fn authorized(app: &App, request: &Request, query: bool) -> bool {
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
+        .and_then(|value| {
+            let (scheme, rest) = value.split_once(' ')?;
+            // RFC 7235: the auth scheme is case-insensitive.
+            scheme.eq_ignore_ascii_case("Bearer").then_some(rest)
+        })
         .map(str::trim);
     if from_header.is_some_and(matches) {
         return true;

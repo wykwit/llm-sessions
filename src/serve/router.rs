@@ -614,6 +614,25 @@ mod tests {
         }
     }
 
+    /// RFC 7235 makes the auth scheme case-insensitive; clients in the
+    /// wild send `bearer`, `BEARER`.
+    #[tokio::test]
+    async fn the_bearer_scheme_matches_case_insensitively() {
+        let Harness { app, .. } = harness();
+        for value in ["bearer s3cret", "BEARER s3cret", "BeArEr  s3cret"] {
+            assert_eq!(
+                status_of(&app, "/v1/sessions", Some(value)).await,
+                StatusCode::OK,
+                "{value}"
+            );
+        }
+        // Still no scheme, no entry.
+        assert_eq!(
+            status_of(&app, "/v1/sessions", Some("s3cret")).await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
     #[tokio::test]
     async fn no_method_but_get_reaches_any_route() {
         let Harness { app, opened, .. } = harness();
