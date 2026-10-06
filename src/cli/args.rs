@@ -286,7 +286,8 @@ pub struct ServeArgs {
     #[arg(long, env = "LLMS_BIND", default_value = "127.0.0.1:8787")]
     pub bind: std::net::SocketAddr,
 
-    /// Shared secret clients must present. Required unless --no-auth.
+    /// Shared secret clients must present. Required unless --no-auth; at
+    /// least 16 characters.
     #[arg(long, env = "LLMS_TOKEN", hide_env_values = true)]
     pub token: Option<String>,
 

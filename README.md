@@ -119,9 +119,12 @@ Read-only by construction: there are only `GET` routes and the WebSocket, so
 nothing archives, indexes, edits hosts or reaches a terminal, and no resume
 command is sent. Clients authenticate with `Authorization: Bearer <token>`;
 `/v1/stream` also takes `?token=` for clients that cannot set headers. The
-default bind is `127.0.0.1:8787`; every bind needs `--token` (or
-`LLMS_TOKEN`), and `--no-auth` is accepted on loopback only. There is no TLS:
-off loopback, put a TLS reverse proxy in front. `--source` and `-q` restrict
+default bind is `127.0.0.1:8787`; every bind needs `--token` (or `LLMS_TOKEN`)
+of at least 16 characters — use high entropy, `openssl rand -hex 32`. A
+browser page can reach a loopback server through DNS rebinding and unguarded
+WebSocket connects, so `--no-auth` (loopback only) answers just requests
+whose `Host` header names the loopback. There is no TLS: off loopback, put a
+TLS reverse proxy in front. `--source` and `-q` restrict
 what is published at all; `--poll-secs` (default 3) sets the rescan interval.
 Only local sessions are served, not those of configured remote hosts.
 

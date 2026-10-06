@@ -16,6 +16,11 @@ use serde::Deserialize;
 
 use super::router::{ApiError, App};
 
+/// Auth attempts are not rate-limited, so anything shorter is brute force
+/// at line speed. A floor, not a strength claim: the README's advice is
+/// high entropy, `openssl rand -hex 32`.
+const MIN_TOKEN_CHARS: usize = 16;
+
 /// The token to require, or `None` for an unauthenticated loopback server.
 pub fn admit(
     bind: SocketAddr,
@@ -26,6 +31,11 @@ pub fn admit(
     match (token, no_auth) {
         (Some(_), true) => Err("--token and --no-auth contradict each other".into()),
         (Some(token), false) if token.trim().is_empty() => Err("--token must not be empty".into()),
+        (Some(token), false) if token.chars().count() < MIN_TOKEN_CHARS => Err(format!(
+            "--token is shorter than {MIN_TOKEN_CHARS} characters; \
+             auth attempts are not rate-limited, so generate one with \
+             `openssl rand -hex 32`"
+        )),
         (Some(token), false) => Ok(Some(token)),
         (None, true) if loopback => Ok(None),
         (None, true) => Err(format!(
@@ -151,10 +161,10 @@ mod tests {
 
     #[test]
     fn a_token_is_required_unless_no_auth_is_explicit_on_loopback() {
-        let token = || Some("s3cret".to_owned());
+        let token = || Some("s3cret-0123456789ab".to_owned());
         assert_eq!(
             admit(at("0.0.0.0:8787"), token(), false),
-            Ok(Some("s3cret".into()))
+            Ok(Some("s3cret-0123456789ab".into()))
         );
         assert_eq!(admit(at("127.0.0.1:8787"), None, true), Ok(None));
         assert_eq!(admit(at("[::1]:8787"), None, true), Ok(None));
@@ -167,6 +177,25 @@ mod tests {
         assert!(admit(at("[::]:8787"), None, true).is_err());
         assert!(admit(at("127.0.0.1:8787"), Some("  ".into()), false).is_err());
         assert!(admit(at("127.0.0.1:8787"), token(), true).is_err());
+    }
+
+    /// Auth attempts are unrate-limited, so a short token falls to brute
+    /// force; the floor is characters, not bytes.
+    #[test]
+    fn a_token_must_reach_the_minimum_length() {
+        let bind = at("127.0.0.1:8787");
+        let at_floor = "a".repeat(MIN_TOKEN_CHARS);
+        assert_eq!(
+            admit(bind, Some(at_floor.clone()), false),
+            Ok(Some(at_floor))
+        );
+        assert!(admit(bind, Some("a".repeat(MIN_TOKEN_CHARS - 1)), false).is_err());
+        // Counted in characters: 15 two-byte characters are 30 bytes and
+        // still refused.
+        let multibyte = "ä".repeat(MIN_TOKEN_CHARS - 1);
+        assert_eq!(multibyte.chars().count(), MIN_TOKEN_CHARS - 1);
+        assert!(multibyte.len() >= MIN_TOKEN_CHARS);
+        assert!(admit(bind, Some(multibyte), false).is_err());
     }
 
     #[test]
