@@ -263,6 +263,11 @@ pub struct TopArgs {
     pub json: bool,
 }
 
+/// Upper bound for --status-window: far below where `Duration::from_hours`
+/// panics on overflow, and past any session anyone will wait on.
+#[cfg(feature = "serve")]
+const MAX_STATUS_WINDOW_HOURS: u64 = 100 * 365 * 24;
+
 #[cfg(feature = "serve")]
 #[derive(Debug, Clone, clap::Args)]
 #[command(after_long_help = "Routes, all GET:\n  \
@@ -299,7 +304,8 @@ pub struct ServeArgs {
 
     /// Sessions written within this many hours get a derived status even
     /// with no agent attached. Live sessions always do.
-    #[arg(long, value_name = "HOURS", default_value_t = 1)]
+    #[arg(long, value_name = "HOURS", default_value_t = 1,
+          value_parser = clap::value_parser!(u64).range(1..=MAX_STATUS_WINDOW_HOURS))]
     pub status_window: u64,
 
     /// Only sessions from this agent. Repeatable.
@@ -402,6 +408,32 @@ mod tests {
                     .command,
                 Some(Command::List(_))
             ));
+        }
+    }
+
+    /// `--status-window` used to panic at startup on huge values, when
+    /// `Duration::from_hours` overflowed; now the parser refuses.
+    #[cfg(feature = "serve")]
+    #[test]
+    fn status_window_takes_a_range_not_a_panic() {
+        for bad in ["0", "99999999999"] {
+            let error =
+                Cli::try_parse_from(["llm-sessions", "serve", "--status-window", bad]).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ValueValidation,
+                "{bad}"
+            );
+        }
+        let parsed =
+            Cli::try_parse_from(["llm-sessions", "serve", "--status-window", "87600"]).unwrap();
+        match parsed.command {
+            Some(Command::Serve(args)) => {
+                assert_eq!(args.status_window, 87_600);
+                // The ceiling stays convertible to a Duration.
+                let _ = std::time::Duration::from_hours(MAX_STATUS_WINDOW_HOURS);
+            }
+            _ => panic!("the serve command did not parse"),
         }
     }
 }
