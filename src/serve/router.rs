@@ -534,6 +534,39 @@ mod tests {
         }
     }
 
+    /// `q=body:` needs the index, and the server must not build it: creating
+    /// an empty one answers an empty list the client cannot tell from "no
+    /// matches", on a host that never asked for an index.
+    #[tokio::test]
+    async fn a_body_query_without_an_index_is_rejected_and_creates_nothing() {
+        let home = std::env::temp_dir().join(format!("llms-serve-no-index-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let (tx, rx) = watch::channel(Arc::new(snapshot("[1]")));
+        let (stop, stopped) = watch::channel(false);
+        let app = Arc::new(App {
+            token: Some(TOKEN.into()),
+            host: "golden".into(),
+            home: home.clone(),
+            sources: Vec::new(),
+            snapshot: rx,
+            facts: Arc::default(),
+            transcripts: TranscriptCache::default(),
+            stopped,
+        });
+        let (status, body) = get(&app, "/v1/sessions?q=body:needle").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"].as_str().unwrap().contains("index"),
+            "{body}"
+        );
+        assert!(
+            !home.join(".cache").exists(),
+            "the request created the index"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        drop((tx, stop));
+    }
+
     #[tokio::test]
     async fn no_method_but_get_reaches_any_route() {
         let Harness { app, opened, .. } = harness();

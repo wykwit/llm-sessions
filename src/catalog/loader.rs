@@ -187,9 +187,18 @@ pub fn body_hits(home: &Path, query: &Query) -> Option<Result<HashSet<(SourceId,
     if !query.needs_index() {
         return None;
     }
+    let path = Index::default_path(home);
+    // A read must not build the index: `Index::open` would happily create an
+    // empty one and the caller could not tell "no matches" from "no index".
+    if !path.is_file() {
+        return Some(Err(Error::Io {
+            path,
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "no index"),
+        }));
+    }
     let expression = query.body_query()?;
     Some(
-        Index::open(&Index::default_path(home))
+        Index::open(&path)
             .and_then(|index| index.search(&expression, 5000))
             .map(|hits| hits.into_iter().map(|h| (h.source, h.session_id)).collect()),
     )
