@@ -67,6 +67,10 @@ pub(super) fn router(app: Arc<App>) -> Router {
         .merge(rest)
         .merge(stream)
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "no such route") })
+        .route_layer(middleware::from_fn_with_state(
+            app.clone(),
+            auth::valid_host,
+        ))
         .with_state(app)
 }
 
@@ -78,7 +82,7 @@ pub(super) struct ApiError {
 }
 
 impl ApiError {
-    fn new(status: StatusCode, message: impl Into<String>) -> Self {
+    pub(super) fn new(status: StatusCode, message: impl Into<String>) -> Self {
         Self {
             status,
             message: message.into(),
@@ -369,11 +373,20 @@ mod tests {
     }
 
     fn harness() -> Harness {
+        harness_with(Some(TOKEN.into()))
+    }
+
+    /// `--no-auth` mode: the branch where a wrong `Host` is the whole attack.
+    fn no_auth_harness() -> Harness {
+        harness_with(None)
+    }
+
+    fn harness_with(token: Option<String>) -> Harness {
         let (tx, rx) = watch::channel(Arc::new(snapshot("[1]")));
         let (stop, stopped) = watch::channel(false);
         let opened = Arc::new(Mutex::new(Vec::new()));
         let app = Arc::new(App {
-            token: Some(TOKEN.into()),
+            token,
             host: "golden".into(),
             home: FsPath::new("/nonexistent-home").into(),
             sources: vec![Box::new(Fake {
@@ -414,6 +427,18 @@ mod tests {
 
     async fn status_of(app: &Arc<App>, uri: &str, auth: Option<&str>) -> StatusCode {
         call(app, Method::GET, uri, auth).await.status()
+    }
+
+    async fn status_with_host(app: &Arc<App>, uri: &str, host: Option<&str>) -> StatusCode {
+        let mut request = Request::builder().method(Method::GET).uri(uri);
+        if let Some(host) = host {
+            request = request.header(header::HOST, host);
+        }
+        router(app.clone())
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
     }
 
     #[tokio::test]
@@ -464,6 +489,49 @@ mod tests {
         // Past auth, a plain GET is refused by the upgrade, not by auth.
         let past = status_of(&app, "/v1/stream?token=s3cret", None).await;
         assert!(past.is_client_error() && past != StatusCode::UNAUTHORIZED);
+    }
+
+    /// `--no-auth` on loopback is still reachable from any web page through
+    /// DNS rebinding or cross-site WebSocket connects; both need the
+    /// attacker's name in `Host`. Only loopback names get answers.
+    #[tokio::test]
+    async fn no_auth_answers_only_loopback_host_headers() {
+        let Harness { app, .. } = no_auth_harness();
+        for host in [
+            None,
+            Some("evil.com:8787"),
+            Some("rebind.attacker.example:8787"),
+            Some("localhost.evil.com"),
+            Some("2130706433:8787"),
+        ] {
+            assert_eq!(
+                status_with_host(&app, "/v1/healthz", host).await,
+                StatusCode::FORBIDDEN,
+                "{host:?}"
+            );
+            assert_eq!(
+                status_with_host(&app, "/v1/sessions", host).await,
+                StatusCode::FORBIDDEN,
+                "{host:?}"
+            );
+            assert_eq!(
+                status_with_host(&app, "/v1/stream", host).await,
+                StatusCode::FORBIDDEN,
+                "{host:?}"
+            );
+        }
+        for host in ["localhost:8787", "127.0.0.1:8787", "[::1]:8787"] {
+            assert_eq!(
+                status_with_host(&app, "/v1/healthz", Some(host)).await,
+                StatusCode::OK,
+                "{host}"
+            );
+            assert_eq!(
+                status_with_host(&app, "/v1/sessions", Some(host)).await,
+                StatusCode::OK,
+                "{host}"
+            );
+        }
     }
 
     #[tokio::test]

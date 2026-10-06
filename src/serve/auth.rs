@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::extract::{Query, Request, State};
-use axum::http::header;
+use axum::http::{StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
@@ -93,6 +93,47 @@ fn authorized(app: &App, request: &Request, query: bool) -> bool {
             .ok()
             .and_then(|Query(query)| query.token)
             .is_some_and(|offered| matches(&offered))
+}
+
+/// Guards `--no-auth`: answers only requests whose `Host` names the
+/// machine's loopback, 403 for the rest.
+///
+/// Loopback binds are still reachable from the browser: a page can point a
+/// name it controls at 127.0.0.1 (DNS rebinding) and read transcripts
+/// same-origin, and a WebSocket needs no CORS at all. Both require the
+/// attacker's hostname in `Host`, so only loopback names pass. With a token
+/// the check is skipped: a reverse proxy legitimately rewrites `Host`.
+pub(super) async fn valid_host(
+    State(app): State<Arc<App>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if app.token.is_none() {
+        let host = request
+            .headers()
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok());
+        if !host.is_some_and(loopback_host) {
+            return ApiError::new(StatusCode::FORBIDDEN, "untrusted Host header").into_response();
+        }
+    }
+    next.run(request).await
+}
+
+/// `Host` is `name` or `name:port`, IPv6 names bracketed.
+fn loopback_host(value: &str) -> bool {
+    let name = match value.rsplit_once(':') {
+        // `127.0.0.1:8787`, `[::1]:8787`; a bare IPv6 address has several
+        // colons and no port, so only split when the left side is not itself
+        // an address.
+        Some((name, _)) if name.starts_with('[') || !name.contains(':') => name,
+        _ => value,
+    };
+    let name = name.trim_matches(['[', ']']);
+    name == "localhost"
+        || name
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.to_canonical().is_loopback())
 }
 
 #[derive(Deserialize)]
