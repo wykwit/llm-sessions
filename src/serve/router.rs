@@ -139,9 +139,11 @@ async fn sessions(
                 .map_err(|e| ApiError::internal(format!("body search panicked: {e}")))?;
         match searched {
             Some(Err(e)) => {
+                // The error names the index file; that is server-side detail.
+                eprintln!("llm-sessions: body search failed: {e}");
                 return Err(ApiError::new(
                     StatusCode::BAD_REQUEST,
-                    format!("body: needs the index ({e}); run `llm-sessions index` on the server"),
+                    "body: needs the index; run `llm-sessions index` on the server",
                 ));
             }
             Some(Ok(hits)) => Some(hits),
@@ -207,7 +209,11 @@ async fn session(
         })
         .await
         .map_err(|e| ApiError::internal(format!("reading the transcript panicked: {e}")))?
-        .map_err(ApiError::internal)?;
+        .map_err(|e| {
+            // The error carries the session's path on this machine.
+            eprintln!("llm-sessions: opening {} failed: {e}", session.id);
+            ApiError::internal("transcript unreadable")
+        })?;
         row.status = Some(status_now(session.liveness.is_running(), facts, &session));
     }
     Ok(Json(
@@ -227,8 +233,12 @@ async fn transcript(
         let worker = app.clone();
         let summary = session.clone();
         let body = tokio::task::spawn_blocking(move || {
-            let transcript = loader::open(&worker.home, &worker.sources, &[], &summary)
-                .map_err(|e| e.to_string())?;
+            let transcript =
+                loader::open(&worker.home, &worker.sources, &[], &summary).map_err(|e| {
+                    // The error carries the session's path on this machine.
+                    eprintln!("llm-sessions: opening {} failed: {e}", summary.id);
+                    "transcript unreadable".to_owned()
+                })?;
             let mut json = serde_json::to_string_pretty(&transcript).map_err(|e| e.to_string())?;
             json.push('\n');
             Ok::<_, String>(Bytes::from(json))
@@ -555,9 +565,11 @@ mod tests {
         });
         let (status, body) = get(&app, "/v1/sessions?q=body:needle").await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+        let printed = body["error"].as_str().unwrap();
+        assert!(printed.contains("index"), "{printed}");
         assert!(
-            body["error"].as_str().unwrap().contains("index"),
-            "{body}"
+            !printed.contains(home.to_string_lossy().as_ref()),
+            "error leaks the index location: {printed}"
         );
         assert!(
             !home.join(".cache").exists(),
