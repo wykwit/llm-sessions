@@ -268,8 +268,9 @@ pub struct TopArgs {
 #[cfg(feature = "serve")]
 const MAX_STATUS_WINDOW_HOURS: u64 = 100 * 365 * 24;
 
+/// Manual `Debug`, below: the derived one would print the token.
 #[cfg(feature = "serve")]
-#[derive(Debug, Clone, clap::Args)]
+#[derive(Clone, clap::Args)]
 #[command(after_long_help = "Routes, all GET:\n  \
     /v1/healthz                    liveness probe, no token\n  \
     /v1/sessions?q=QUERY&limit=N   rows as `list --json`, plus a derived `status`\n  \
@@ -315,6 +316,25 @@ pub struct ServeArgs {
     /// Base query every published row must match, in the `list -q` grammar.
     #[arg(long, short = 'q')]
     pub query: Option<String>,
+}
+
+/// Nothing that prints args may print the token: one stray `{:?}` on the
+/// parsed CLI would otherwise copy the secret into a log. `Command` derives
+/// `Debug`, so this is a lying `Debug` on purpose.
+#[cfg(feature = "serve")]
+impl std::fmt::Debug for ServeArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServeArgs")
+            .field("bind", &self.bind)
+            .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .field("no_auth", &self.no_auth)
+            .field("host_name", &self.host_name)
+            .field("poll_secs", &self.poll_secs)
+            .field("status_window", &self.status_window)
+            .field("sources", &self.sources)
+            .field("query", &self.query)
+            .finish()
+    }
 }
 
 #[cfg(feature = "serve")]
@@ -409,6 +429,26 @@ mod tests {
                 Some(Command::List(_))
             ));
         }
+    }
+
+    /// One stray `{:?}` on the parsed CLI must not copy the token into a
+    /// log, so `Debug` is a lie for that one field.
+    #[cfg(feature = "serve")]
+    #[test]
+    fn serve_args_debug_never_prints_the_token() {
+        let args = ServeArgs {
+            bind: "127.0.0.1:8787".parse().unwrap(),
+            token: Some("s3cret-do-not-print".into()),
+            no_auth: false,
+            host_name: None,
+            poll_secs: 3,
+            status_window: 1,
+            sources: Vec::new(),
+            query: None,
+        };
+        let printed = format!("{args:?}");
+        assert!(!printed.contains("s3cret"), "{printed}");
+        assert!(printed.contains("<redacted>"), "{printed}");
     }
 
     /// `--status-window` used to panic at startup on huge values, when
